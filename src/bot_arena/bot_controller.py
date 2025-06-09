@@ -10,7 +10,13 @@ class BotController:
         :param bot_path: Path to the bot's executable file.
         :param name: Name of the bot.
         """
-        self.process = subprocess.Popen([bot_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.process = subprocess.Popen(
+            [bot_path], 
+            stdin=subprocess.PIPE, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True
+        )
         self.name = name
         self.process.stdin.flush()
         self.process.stdout.flush()
@@ -24,7 +30,7 @@ class BotController:
         self.process.stdin.write(message + '\n')
         self.process.stdin.flush()
 
-    def read_line(self, timeout=2):
+    def read_lines(self, timeout=2):
         """
         Read a line from the bot's stdout with a timeout.
 
@@ -32,9 +38,12 @@ class BotController:
         :return: The read line or None if timeout occurs.
         """
         rlist, _, _ = select.select([self.process.stdout], [], [], timeout)
+        lines = []
         if rlist:
-            return self.process.stdout.readline().strip()
-        return None
+            for _ in range(4):  # Read up to 4 lines
+                line = self.process.stdout.readline()
+                lines.append(line.strip())
+        return lines
 
     def setup(self, color, width, height):
         """
@@ -47,13 +56,10 @@ class BotController:
         :return: List of four strings representing the piece placement.
         """
         self.send(f"{color} {self.name} {width} {height}")
-        rows = []
-        for _ in range(4):
-            row = self.read_line()
-            if row is None:
-                raise TimeoutError("Bot did not respond in time to setup request.")
-            rows.append(row)
-        return rows
+        rows = self.read_lines()
+        if not rows:
+            raise TimeoutError("Bot did not respond in time to setup request.")
+        return '\n'.join(rows)
 
     def make_move(self, last_move, outcome, board_state):
         """
@@ -68,10 +74,10 @@ class BotController:
         self.send(f"{last_move} {outcome}")
         for row in board_state:
             self.send(row)
-        move = self.read_line()
+        move = self.read_lines()
         if move is None:
             raise TimeoutError("Bot did not respond in time to move request.")
-        confirmation = self.read_line()
+        confirmation = self.read_lines()
         if confirmation is None:
             raise TimeoutError("Bot did not respond in time to move confirmation.")
         return move, confirmation
@@ -89,8 +95,8 @@ class BotController:
         """
         self.send("SURRENDER")
 
-    def __del__(self):
-        """
-        Destructor: Terminate the bot process when the object is deleted.
-        """
-        self.process.terminate()
+    # def __del__(self):
+    #     """
+    #     Destructor: Terminate the bot process when the object is deleted.
+    #     """
+    #     self.process.terminate()
