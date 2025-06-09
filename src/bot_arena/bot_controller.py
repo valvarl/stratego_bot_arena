@@ -1,102 +1,99 @@
-import subprocess
+"""Interface for communicating with external Stratego bots."""
+
+from __future__ import annotations
+
 import select
-import time
+import subprocess
+from typing import List, Optional
+
 
 class BotController:
-    def __init__(self, bot_path, name: str):
-        """
-        Initialize the bot controller.
+    """Wraps a subprocess running a Stratego bot following the evaluator protocol."""
 
-        :param bot_path: Path to the bot's executable file.
-        :param name: Name of the bot.
-        """
-        self.process = subprocess.Popen(
-            [bot_path], 
-            stdin=subprocess.PIPE, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            text=True
-        )
+    def __init__(self, bot_path: str, name: str, timeout: float = 2.0) -> None:
         self.name = name
-        self.process.stdin.flush()
-        self.process.stdout.flush()
+        self.timeout = timeout
+        self.process = subprocess.Popen(
+            [bot_path],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,  # line buffering
+        )
 
-    def send(self, message):
-        """
-        Send a message to the bot via stdin.
+    # ------------------------------------------------------------------
+    # utility helpers
+    def _send_line(self, line: str) -> None:
+        if self.process.stdin is None:
+            return
+        try:
+            self.process.stdin.write(line + "\n")
+            self.process.stdin.flush()
+        except BrokenPipeError:
+            pass
 
-        :param message: String to send.
-        """
-        self.process.stdin.write(message + '\n')
-        self.process.stdin.flush()
-
-    def read_lines(self, timeout=2):
-        """
-        Read a line from the bot's stdout with a timeout.
-
-        :param timeout: Timeout duration in seconds.
-        :return: The read line or None if timeout occurs.
-        """
+    def _read_line(self, timeout: Optional[float] = None) -> Optional[str]:
+        if timeout is None:
+            timeout = self.timeout
+        assert self.process.stdout is not None
         rlist, _, _ = select.select([self.process.stdout], [], [], timeout)
-        lines = []
         if rlist:
-            for _ in range(4):  # Read up to 4 lines
-                line = self.process.stdout.readline()
-                lines.append(line.strip())
+            return self.process.stdout.readline().rstrip("\n")
+        return None
+
+    def _read_lines(self, count: int, timeout: Optional[float] = None) -> List[str]:
+        """Read a fixed number of lines, waiting for the first one."""
+
+        first = self._read_line(timeout)
+        if first is None:
+            raise TimeoutError("Bot did not respond in time")
+
+        lines = [first]
+        for _ in range(count - 1):
+            line = self.process.stdout.readline().rstrip("\n")
+            if line == "":
+                raise TimeoutError("Bot closed the pipe unexpectedly")
+            lines.append(line)
         return lines
 
-    def setup(self, color, width, height):
-        """
-        Setup phase: Send color and board dimensions to the bot,
-        and receive the initial piece placement.
+    # ------------------------------------------------------------------
+    # protocol steps
+    def setup(self, color: str, width: int, height: int, opponent: str = "bot") -> str:
+        """Send setup information and read the placement response."""
 
-        :param color: Bot's color ("RED" or "BLUE").
-        :param width: Board width (10).
-        :param height: Board height (10).
-        :return: List of four strings representing the piece placement.
-        """
-        self.send(f"{color} {self.name} {width} {height}")
-        rows = self.read_lines()
-        if not rows:
-            raise TimeoutError("Bot did not respond in time to setup request.")
-        return '\n'.join(rows)
+        self._send_line(f"{color} {opponent} {width} {height}")
+        rows = self._read_lines(4)
+        return "\n".join(rows)
 
-    def make_move(self, last_move, outcome, board_state):
-        """
-        Move phase: Send the result of the previous move and board state,
-        and receive the bot's move and confirmation.
+    def request_move(self, last_move: str, outcome: str, board_state: List[str]) -> str:
+        """Request a move from the bot given the current board."""
 
-        :param last_move: Opponent's last move or "START" for the first move.
-        :param outcome: Outcome of the previous move.
-        :param board_state: List of 10 strings representing the board state.
-        :return: Tuple (bot's move, confirmation).
-        """
-        self.send(f"{last_move} {outcome}")
+        if last_move == "START":
+            self._send_line("START")
+        else:
+            self._send_line(f"{last_move} {outcome}")
         for row in board_state:
-            self.send(row)
-        move = self.read_lines()
-        if move is None:
-            raise TimeoutError("Bot did not respond in time to move request.")
-        confirmation = self.read_lines()
-        if confirmation is None:
-            raise TimeoutError("Bot did not respond in time to move confirmation.")
-        return move, confirmation
+            self._send_line(row)
+        line = self._read_line()
+        if line is None:
+            raise TimeoutError("Bot did not return a move")
+        return line
 
-    def end_game(self):
-        """
-        End game phase: Send the end game signal and terminate the bot process.
-        """
-        self.send("QUIT")
-        self.process.terminate()
+    def confirm_result(self, move: str, outcome: str) -> None:
+        """Send the outcome of the previously issued move."""
 
-    def surrender(self):
-        """
-        Send the surrender command.
-        """
-        self.send("SURRENDER")
+        self._send_line(f"{move} {outcome}")
 
-    # def __del__(self):
-    #     """
-    #     Destructor: Terminate the bot process when the object is deleted.
-    #     """
-    #     self.process.terminate()
+    def end_game(self, result: str = "") -> None:
+        """Terminate the bot process by sending QUIT."""
+
+        if result:
+            self._send_line(f"QUIT {result}")
+        else:
+            self._send_line("QUIT")
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=0.5)
+        except Exception:
+            pass
+

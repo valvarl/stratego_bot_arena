@@ -64,6 +64,7 @@ class GameManager:
                 color="RED",
                 width=self.config.width,
                 height=self.config.height,
+                opponent=self.blue_bot.name if self.blue_bot else "bot",
             )
 
         if isinstance(red_setup, str):
@@ -74,6 +75,7 @@ class GameManager:
                 color="BLUE",
                 width=self.config.width,
                 height=self.config.height,
+                opponent=self.red_bot.name if self.red_bot else "bot",
             )
 
         if isinstance(blue_setup, str):
@@ -245,7 +247,7 @@ class GameManager:
             controller = self.red_bot if player == Player.RED else self.blue_bot
 
             if controller is not None:
-                move_str, _ = controller.make_move(last_move, outcome, board_lines)
+                move_str = controller.request_move(last_move, outcome, board_lines)
             else:
                 print("Last move:", last_move, outcome)
                 for line in board_lines:
@@ -255,12 +257,10 @@ class GameManager:
             parsed = self.parse_move(move_str)
             if parsed in {"SURRENDER", "QUIT"}:
                 outcome = "SURRENDER"
-                last_move = move_str
                 terminated = True
                 break
             if parsed == "NO_MOVE" or parsed is None:
                 outcome = "ILLEGAL"
-                last_move = move_str
                 terminated = True
                 break
             x, y, direction, mult = parsed
@@ -271,7 +271,6 @@ class GameManager:
             valid_select = self.env.valid_pieces_to_select()[src]
             if not valid_select:
                 outcome = "ILLEGAL"
-                last_move = move_str
                 terminated = True
                 break
 
@@ -285,10 +284,12 @@ class GameManager:
                 last_move = f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
             else:
                 outcome = "ILLEGAL"
-                last_move = move_str
                 terminated = True
 
+            if controller is not None and not terminated:
+                controller.confirm_result(last_move, outcome)
+
         if self.red_bot is not None:
-            self.red_bot.end_game()
+            self.red_bot.end_game(outcome)
         if self.blue_bot is not None:
-            self.blue_bot.end_game()
+            self.blue_bot.end_game(outcome)
