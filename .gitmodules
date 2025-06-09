@@ -1,0 +1,6 @@
+[submodule "lib/stratego_evaluator"]
+	path = lib/stratego_evaluator
+	url = https://github.com/valvarl/stratego_evaluator.git
+[submodule "lib/demon_of_ignorance"]
+	path = lib/demon_of_ignorance
+	url = https://github.com/valvarl/demon_of_ignorance.git
