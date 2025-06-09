@@ -4,6 +4,7 @@ from typing import Optional
 
 import gymnasium as gym
 import pygame
+import numpy as np
 from stratego import StrategoConfigBase, StrategoEnv, StrategoEnvCpp, Piece, Player
 
 from .bot_controller import BotController
@@ -28,6 +29,8 @@ class GameManager:
         '1': Piece.MARSHAL
     }
 
+    piece_to_token = {v: k for k, v in token_to_piece.items()}
+
     def __init__(
         self,
         config: StrategoConfigBase,
@@ -51,16 +54,8 @@ class GameManager:
         self.red_bot = red_bot
         self.blue_bot = blue_bot
     
-    def run(
-        self, 
-        red_setup: str | list[list[Piece]] | None = None,
-        blue_setup: str | list[list[Piece]] | None = None,
-    ):
-        self.setup(red_setup, blue_setup)
-        
-
     def setup(
-        self, 
+        self,
         red_setup: str | list[list[Piece]] | None = None,
         blue_setup: str | list[list[Piece]] | None = None,
     ) -> None:
@@ -152,4 +147,140 @@ class GameManager:
         return result
 
     def board_to_str(self):
-        pass
+        board = self.env.board
+        lines = []
+        for r in range(board.shape[0]):
+            row_chars = []
+            for c in range(board.shape[1]):
+                val = int(board[r, c])
+                if val == Piece.EMPTY.value:
+                    row_chars.append('.')
+                elif val == Piece.LAKE.value or val == -Piece.LAKE.value:
+                    row_chars.append('+')
+                elif val > 0:
+                    row_chars.append(self.piece_to_token.get(Piece(val), '?'))
+                else:
+                    row_chars.append('#')
+            lines.append(''.join(row_chars))
+        return lines
+
+    def parse_move(self, move: str):
+        tokens = move.strip().split()
+        if not tokens:
+            return None
+        if tokens[0].upper() in {"SURRENDER", "QUIT"}:
+            return tokens[0].upper()
+        if tokens[0].upper() == "NO_MOVE":
+            return "NO_MOVE"
+        if len(tokens) < 3:
+            return None
+        x = int(tokens[0])
+        y = int(tokens[1])
+        direction = tokens[2].upper()
+        multiplier = int(tokens[3]) if len(tokens) > 3 else 1
+        return x, y, direction, multiplier
+
+    def _dest_from_move(self, x: int, y: int, direction: str, multiplier: int):
+        dx, dy = 0, 0
+        if direction == "UP":
+            dy = -multiplier
+        elif direction == "DOWN":
+            dy = multiplier
+        elif direction == "LEFT":
+            dx = -multiplier
+        elif direction == "RIGHT":
+            dx = multiplier
+        else:
+            raise ValueError(f"Unknown direction: {direction}")
+        return x + dx, y + dy
+
+    def _compute_outcome(self, before, after, src, dst):
+        atk = before[src]
+        defn = before[dst]
+        after_dst = after[dst]
+        if defn == Piece.EMPTY.value:
+            return "OK"
+        atk_token = self.piece_to_token.get(Piece(abs(int(atk))), "?")
+        def_token = self.piece_to_token.get(Piece(abs(int(defn))), "?")
+        if defn == -Piece.FLAG.value:
+            return "FLAG"
+        if after_dst == atk:
+            return f"KILLS {atk_token} {def_token}"
+        elif after_dst == defn:
+            return f"DIES {atk_token} {def_token}"
+        elif after_dst == Piece.EMPTY.value:
+            return f"BOTHDIE {atk_token} {def_token}"
+        else:
+            return "ILLEGAL"
+
+    def _get_move_from_human(self):
+        return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
+
+    def run(
+        self,
+        red_setup: str | list[list[Piece]] | None = None,
+        blue_setup: str | list[list[Piece]] | None = None,
+    ):
+        self.setup(red_setup, blue_setup)
+
+        last_move = "START"
+        outcome = "OK"
+        terminated = False
+        while not terminated:
+            if self.render_mode == "human":
+                self.env.render()
+
+            board_lines = self.board_to_str()
+
+            player = self.env.player
+            controller = self.red_bot if player == Player.RED else self.blue_bot
+
+            if controller is not None:
+                move_str, _ = controller.make_move(last_move, outcome, board_lines)
+            else:
+                print("Last move:", last_move, outcome)
+                for line in board_lines:
+                    print(line)
+                move_str = self._get_move_from_human()
+
+            parsed = self.parse_move(move_str)
+            if parsed in {"SURRENDER", "QUIT"}:
+                outcome = "SURRENDER"
+                last_move = move_str
+                terminated = True
+                break
+            if parsed == "NO_MOVE" or parsed is None:
+                outcome = "ILLEGAL"
+                last_move = move_str
+                terminated = True
+                break
+            x, y, direction, mult = parsed
+            src = (y, x)
+            dst = self._dest_from_move(x, y, direction, mult)
+            dst = (dst[1], dst[0])
+
+            valid_select = self.env.valid_pieces_to_select()[src]
+            if not valid_select:
+                outcome = "ILLEGAL"
+                last_move = move_str
+                terminated = True
+                break
+
+            self.env.step(src)
+            if self.env.valid_destinations()[dst]:
+                before = self.env.board.copy()
+                obs, reward, term, trunc, info = self.env.step(dst)
+                after = np.rot90(self.env.board, 2) * -1
+                outcome = self._compute_outcome(before, after, src, dst)
+                terminated = term or trunc
+                last_move = f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
+            else:
+                outcome = "ILLEGAL"
+                last_move = move_str
+                terminated = True
+
+        if self.red_bot is not None:
+            self.red_bot.end_game()
+        if self.blue_bot is not None:
+            self.blue_bot.end_game()
+
