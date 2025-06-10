@@ -1,3 +1,8 @@
+from pathlib import Path
+import sys
+
+sys.path.append(str(Path(__file__).resolve().parent / "src"))
+
 from stratego import StrategoConfig, GameMode
 
 from bot_arena.bot_controller import BotController
