@@ -205,6 +205,18 @@ class GameManager:
             raise ValueError(f"Unknown direction: {direction}")
         return x + dx, y + dy
 
+    def _rotate_move(self, move):
+        x, y, direction, mult = move
+        x = self.config.width - 1 - x
+        y = self.config.height - 1 - y
+        dir_map = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+        direction = dir_map[direction]
+        return x, y, direction, mult
+
+    def _move_to_str(self, move):
+        x, y, direction, mult = move
+        return f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
+
     def _compute_outcome(self, before, after, src, dst):
         atk = before[src]
         defn = before[dst]
@@ -234,7 +246,8 @@ class GameManager:
     ):
         self.setup(red_setup, blue_setup)
 
-        last_move = "START"
+        last_move: tuple[int,int,str,int] | None = None
+        last_player: Player | None = None
         outcome = "OK"
         terminated = False
         while not terminated:
@@ -246,13 +259,25 @@ class GameManager:
             player = self.env.player
             controller = self.red_bot if player == Player.RED else self.blue_bot
 
-            if controller is not None:
-                move_str = controller.request_move(last_move, outcome, board_lines)
+            if last_move is None:
+                msg = "START"
             else:
-                print("Last move:", last_move, outcome)
+                msg_move = (
+                    last_move
+                    if player == last_player
+                    else self._rotate_move(last_move)
+                )
+                msg = self._move_to_str(msg_move)
+
+            if controller is not None:
+                move_str = controller.request_move(msg, outcome, board_lines)
+            else:
+                print("Last move:", msg, outcome)
                 for line in board_lines:
                     print(line)
                 move_str = self._get_move_from_human()
+
+            print(f"Move from {'Red' if player == Player.RED else 'Blue'}: {move_str}")
 
             parsed = self.parse_move(move_str)
             if parsed in {"SURRENDER", "QUIT"}:
@@ -281,13 +306,18 @@ class GameManager:
                 after = np.rot90(self.env.board, 2) * -1
                 outcome = self._compute_outcome(before, after, src, dst)
                 terminated = term or trunc
-                last_move = f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
+                last_move = (x, y, direction, mult)
+                last_player = player
             else:
                 outcome = "ILLEGAL"
                 terminated = True
 
+            print("Outcome:", outcome)
+
             if controller is not None and not terminated:
-                controller.confirm_result(last_move, outcome)
+                controller.confirm_result(self._move_to_str(last_move), outcome)
+
+        print("Game ended with outcome:", outcome)
 
         if self.red_bot is not None:
             self.red_bot.end_game(outcome)
