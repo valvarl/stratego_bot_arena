@@ -37,6 +37,7 @@ class GameManager:
         red_bot: Optional[BotController] = None,
         blue_bot: Optional[BotController] = None,
         render_mode: Optional[str] = "human",
+        log_file: Optional[str] = None,
     ):
         self.config = config
         self.render_mode = render_mode
@@ -53,30 +54,36 @@ class GameManager:
         
         self.red_bot = red_bot
         self.blue_bot = blue_bot
+        self.log_file = log_file
+        self._log = open(log_file, "w") if log_file else None
     
     def setup(
         self,
         red_setup: str | list[list[Piece]] | None = None,
         blue_setup: str | list[list[Piece]] | None = None,
-    ) -> None:
+    ) -> tuple[str | None, str | None]:
+        raw_red = None
+        raw_blue = None
         if self.red_bot is not None:
-            red_setup = self.red_bot.setup(
+            raw_red = self.red_bot.setup(
                 color="RED",
                 width=self.config.width,
                 height=self.config.height,
                 opponent=self.blue_bot.name if self.blue_bot else "bot",
             )
+            red_setup = raw_red
 
         if isinstance(red_setup, str):
             red_setup = self.parse_setup(red_setup)
 
         if self.blue_bot is not None:
-            blue_setup = self.blue_bot.setup(
+            raw_blue = self.blue_bot.setup(
                 color="BLUE",
                 width=self.config.width,
                 height=self.config.height,
                 opponent=self.red_bot.name if self.red_bot else "bot",
             )
+            blue_setup = raw_blue
 
         if isinstance(blue_setup, str):
             blue_setup = self.parse_setup(blue_setup)
@@ -84,8 +91,9 @@ class GameManager:
         red_total = sum(self.config.p1_pieces_num)
         blue_total = sum(self.config.p2_pieces_num)
 
-        print(f"Red setup: {red_setup}")
-        print(f"Blue setup: {blue_setup}")
+        if self._log is None:
+            print(f"Red setup: {red_setup}")
+            print(f"Blue setup: {blue_setup}")
 
         if red_total != blue_total:
             raise ValueError("Red and Blue setups must have the same number of pieces.")
@@ -114,6 +122,8 @@ class GameManager:
                     action = self.env.action_space.sample()  # Random action if no setup provided
                 self.env.step(action)
                 blue_turn += 1
+
+        return raw_red, raw_blue
 
     def setup_to_action(self, setup: list[list[Piece]], player: Player, turn: int) -> tuple[int, int]:
         pieces_num = self.config.p1_pieces if player == Player.RED else self.config.p2_pieces
@@ -205,6 +215,18 @@ class GameManager:
             raise ValueError(f"Unknown direction: {direction}")
         return x + dx, y + dy
 
+    def _rotate_move(self, move):
+        x, y, direction, mult = move
+        x = self.config.width - 1 - x
+        y = self.config.height - 1 - y
+        dir_map = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
+        direction = dir_map[direction]
+        return x, y, direction, mult
+
+    def _move_to_str(self, move):
+        x, y, direction, mult = move
+        return f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
+
     def _compute_outcome(self, before, after, src, dst):
         atk = before[src]
         defn = before[dst]
@@ -214,7 +236,7 @@ class GameManager:
         atk_token = self.piece_to_token.get(Piece(abs(int(atk))), "?")
         def_token = self.piece_to_token.get(Piece(abs(int(defn))), "?")
         if defn == -Piece.FLAG.value:
-            return "FLAG"
+            return "VICTORY_FLAG"
         if after_dst == atk:
             return f"KILLS {atk_token} {def_token}"
         elif after_dst == defn:
@@ -232,11 +254,25 @@ class GameManager:
         red_setup: str | list[list[Piece]] | None = None,
         blue_setup: str | list[list[Piece]] | None = None,
     ):
-        self.setup(red_setup, blue_setup)
+        raw_red, raw_blue = self.setup(red_setup, blue_setup)
 
-        last_move = "START"
+        if self._log:
+            red_name = self.red_bot.path if self.red_bot else "HUMAN"
+            self._log.write(f"{red_name} RED SETUP\n")
+            if raw_red:
+                for line in raw_red.splitlines():
+                    self._log.write(line + "\n")
+            blue_name = self.blue_bot.path if self.blue_bot else "HUMAN"
+            self._log.write(f"{blue_name} BLUE SETUP\n")
+            if raw_blue:
+                for line in raw_blue.splitlines():
+                    self._log.write(line + "\n")
+
+        last_move: tuple[int,int,str,int] | None = None
+        last_player: Player | None = None
         outcome = "OK"
         terminated = False
+        turn_num = 1
         while not terminated:
             if self.render_mode == "human":
                 self.env.render()
@@ -246,13 +282,26 @@ class GameManager:
             player = self.env.player
             controller = self.red_bot if player == Player.RED else self.blue_bot
 
-            if controller is not None:
-                move_str = controller.request_move(last_move, outcome, board_lines)
+            if last_move is None:
+                msg = "START"
             else:
-                print("Last move:", last_move, outcome)
+                msg_move = (
+                    last_move
+                    if player == last_player
+                    else self._rotate_move(last_move)
+                )
+                msg = self._move_to_str(msg_move)
+
+            if controller is not None:
+                move_str = controller.request_move(msg, outcome, board_lines)
+            else:
+                print("Last move:", msg, outcome)
                 for line in board_lines:
                     print(line)
                 move_str = self._get_move_from_human()
+
+            if self._log is None:
+                print(f"Move from {'Red' if player == Player.RED else 'Blue'}: {move_str}")
 
             parsed = self.parse_move(move_str)
             if parsed in {"SURRENDER", "QUIT"}:
@@ -281,15 +330,38 @@ class GameManager:
                 after = np.rot90(self.env.board, 2) * -1
                 outcome = self._compute_outcome(before, after, src, dst)
                 terminated = term or trunc
-                last_move = f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
+                last_move = (x, y, direction, mult)
+                last_player = player
             else:
                 outcome = "ILLEGAL"
                 terminated = True
 
+            if self._log is None:
+                print("Outcome:", outcome)
+
+            if self._log:
+                color_str = "RED" if player == Player.RED else "BLU"
+                self._log.write(f"{turn_num} {color_str}: {self._move_to_str((x, y, direction, mult))} {outcome}\n")
+                turn_num += 1
+
             if controller is not None and not terminated:
-                controller.confirm_result(last_move, outcome)
+                controller.confirm_result(self._move_to_str(last_move), outcome)
+
+        if self._log is None:
+            print("Game ended with outcome:", outcome)
+
+        red_remaining = int(np.sum((self.env.board > 0) & (self.env.board != Piece.LAKE.value)))
+        blue_remaining = int(np.sum((self.env.board < 0) & (self.env.board != -Piece.LAKE.value)))
+
+        if self._log:
+            winner = "RED" if last_player == Player.RED else "BLUE"
+            winner_path = self.red_bot.path if last_player == Player.RED else self.blue_bot.path
+            self._log.write(f"{winner_path} {winner} VICTORY {turn_num-1} {red_remaining} {blue_remaining}\n")
 
         if self.red_bot is not None:
             self.red_bot.end_game(outcome)
         if self.blue_bot is not None:
             self.blue_bot.end_game(outcome)
+
+        if self._log is not None:
+            self._log.close()

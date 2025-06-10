@@ -13,6 +13,8 @@ class BotController:
     def __init__(self, bot_path: str, name: str, timeout: float = 2.0) -> None:
         self.name = name
         self.timeout = timeout
+        self.path = bot_path
+        self.alive = True
         self.process = subprocess.Popen(
             [bot_path],
             stdin=subprocess.PIPE,
@@ -30,7 +32,7 @@ class BotController:
             self.process.stdin.write(line + "\n")
             self.process.stdin.flush()
         except BrokenPipeError:
-            pass
+            self.alive = False
 
     def _read_line(self, timeout: Optional[float] = None) -> Optional[str]:
         if timeout is None:
@@ -38,7 +40,11 @@ class BotController:
         assert self.process.stdout is not None
         rlist, _, _ = select.select([self.process.stdout], [], [], timeout)
         if rlist:
-            return self.process.stdout.readline().rstrip("\n")
+            line = self.process.stdout.readline()
+            if line == "":
+                self.alive = False
+                return None
+            return line.rstrip("\n")
         return None
 
     def _read_lines(self, count: int, timeout: Optional[float] = None) -> List[str]:
@@ -50,9 +56,11 @@ class BotController:
 
         lines = [first]
         for _ in range(count - 1):
-            line = self.process.stdout.readline().rstrip("\n")
+            line = self.process.stdout.readline()
             if line == "":
+                self.alive = False
                 raise TimeoutError("Bot closed the pipe unexpectedly")
+            line = line.rstrip("\n")
             lines.append(line)
         return lines
 
@@ -63,6 +71,7 @@ class BotController:
 
         self._send_line(f"{color} {opponent} {width} {height}")
         rows = self._read_lines(4)
+        print(f"{self.name} setup lines: {rows}")
         return "\n".join(rows)
 
     def request_move(self, last_move: str, outcome: str, board_state: List[str]) -> str:
@@ -75,6 +84,7 @@ class BotController:
         for row in board_state:
             self._send_line(row)
         line = self._read_line()
+        print(f"{self.name} move response: {line}")
         if line is None:
             raise TimeoutError("Bot did not return a move")
         return line
