@@ -358,6 +358,7 @@ class GameManager:
             winner_path = self.red_bot.path if last_player == Player.RED else self.blue_bot.path
             self._log.write(f"{winner_path} {winner} VICTORY {turn_num-1} {red_remaining} {blue_remaining}\n")
 
+
         if self.red_bot is not None:
             self.red_bot.end_game(outcome)
         if self.blue_bot is not None:
