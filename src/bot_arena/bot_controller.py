@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import select
 import subprocess
 from typing import List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class BotController:
@@ -71,7 +75,7 @@ class BotController:
 
         self._send_line(f"{color} {opponent} {width} {height}")
         rows = self._read_lines(4)
-        print(f"{self.name} setup lines: {rows}")
+        logger.debug("%s setup lines: %s", self.name, rows)
         return "\n".join(rows)
 
     def request_move(self, last_move: str, outcome: str, board_state: List[str]) -> str:
@@ -84,7 +88,7 @@ class BotController:
         for row in board_state:
             self._send_line(row)
         line = self._read_line()
-        print(f"{self.name} move response: {line}")
+        logger.debug("%s move response: %s", self.name, line)
         if line is None:
             raise TimeoutError("Bot did not return a move")
         return line
@@ -106,4 +110,3 @@ class BotController:
             self.process.wait(timeout=0.5)
         except Exception:
             pass
-

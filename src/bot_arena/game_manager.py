@@ -1,33 +1,42 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
 
 import gymnasium as gym
-import pygame
 import numpy as np
-from stratego import StrategoConfigBase, StrategoConfig, StrategoConfigCpp, Piece, Player
+from stratego import (
+    StrategoConfigBase,
+    StrategoConfig,
+    StrategoConfigCpp,
+    Piece,
+    Player,
+)
 
 from .bot_controller import BotController
+
+
+logger = logging.getLogger(__name__)
 
 
 class GameManager:
 
     token_to_piece = {
-        '.': Piece.EMPTY,
-        '+': Piece.LAKE,
-        'F': Piece.FLAG,
-        'B': Piece.BOMB,
-        's': Piece.SPY,
-        '9': Piece.SCOUT,
-        '8': Piece.MINER,
-        '7': Piece.SERGEANT,
-        '6': Piece.LIEUTENANT,
-        '5': Piece.CAPTAIN,
-        '4': Piece.MAJOR,
-        '3': Piece.COLONEL,
-        '2': Piece.GENERAL,
-        '1': Piece.MARSHAL
+        ".": Piece.EMPTY,
+        "+": Piece.LAKE,
+        "F": Piece.FLAG,
+        "B": Piece.BOMB,
+        "s": Piece.SPY,
+        "9": Piece.SCOUT,
+        "8": Piece.MINER,
+        "7": Piece.SERGEANT,
+        "6": Piece.LIEUTENANT,
+        "5": Piece.CAPTAIN,
+        "4": Piece.MAJOR,
+        "3": Piece.COLONEL,
+        "2": Piece.GENERAL,
+        "1": Piece.MARSHAL,
     }
 
     piece_to_token = {v: k for k, v in token_to_piece.items()}
@@ -52,12 +61,12 @@ class GameManager:
         else:
             raise ValueError("Unsupported game configuration type.")
         self.env.reset()
-        
+
         self.red_bot = red_bot
         self.blue_bot = blue_bot
         self.log_file = log_file
         self._log = open(log_file, "w") if log_file else None
-    
+
     def setup(
         self,
         red_setup: str | list[list[Piece]] | None = None,
@@ -88,15 +97,14 @@ class GameManager:
 
         if isinstance(blue_setup, str):
             blue_setup = self.parse_setup(blue_setup)
+            blue_setup = [row[::-1] for row in blue_setup]
 
         red_total = sum(self.config.p1_pieces_num)
         blue_total = sum(self.config.p2_pieces_num)
 
-        # if self._log is None:
-        print(f"Red setup: {red_setup}")
-        print(f"Blue setup: {blue_setup}")
-
-        blue_setup = [row[::-1] for row in blue_setup]
+        if self._log is None:
+            logger.debug("Red setup: %s", red_setup)
+            logger.debug("Blue setup: %s", blue_setup)
 
         if red_total != blue_total:
             raise ValueError("Red and Blue setups must have the same number of pieces.")
@@ -108,7 +116,7 @@ class GameManager:
             raise ValueError("Red setups must match the board dimensions.")
         if blue_setup is not None and blue_total != len(blue_setup) * len(blue_setup[0]):
             raise ValueError("Blue setups must match the board dimensions.")
-        
+
         red_turn = blue_turn = 0
         for turn in range(red_total + blue_total):
             if (turn % 2 == 0 and red_turn < red_total) or blue_turn >= blue_total:
@@ -125,12 +133,9 @@ class GameManager:
                     action = (6 + action[1], 10 - action[0] - 1)
                 else:
                     action = self.env.action_space.sample()  # Random action if no setup provided
-                print(action)
 
                 self.env.step(action)
                 blue_turn += 1
-
-        print(self.env.board)
 
         return raw_red, raw_blue
 
@@ -164,7 +169,7 @@ class GameManager:
         raise ValueError(f"No {target_piece.name} found for turn {turn}")
 
     def parse_setup(self, setup_string: str) -> list[Piece]:
-        rows = setup_string.strip().split('\n')
+        rows = setup_string.strip().split("\n")
 
         result = []
         for row in rows:
@@ -184,14 +189,14 @@ class GameManager:
             for c in range(board.shape[1]):
                 val = int(board[r, c])
                 if val == Piece.EMPTY.value:
-                    row_chars.append('.')
+                    row_chars.append(".")
                 elif val == Piece.LAKE.value or val == -Piece.LAKE.value:
-                    row_chars.append('+')
+                    row_chars.append("+")
                 elif val > 0:
-                    row_chars.append(self.piece_to_token.get(Piece(val), '?'))
+                    row_chars.append(self.piece_to_token.get(Piece(val), "?"))
                 else:
-                    row_chars.append('#')
-            lines.append(''.join(row_chars))
+                    row_chars.append("#")
+            lines.append("".join(row_chars))
 
         if reveal == Player.RED:
             lines = [row[::-1] for row in lines[::-1]]
@@ -235,7 +240,7 @@ class GameManager:
         dir_map = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
         direction = dir_map[direction]
         return x, y, direction, mult
-    
+
     def _rotate_move_str(self, move_str):
         move = move_str.strip().split()
         if len(move) > 4 or not move:
@@ -271,8 +276,7 @@ class GameManager:
             return "ILLEGAL"
 
     def _get_move_from_human(self, player: Player):
-        move = input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
-        return move if player == Player.RED else self._rotate_move_str(move)
+        return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
     
     def _src_dest_from_move(self, x: int, y: int, direction: str, multiplier: int, player: Player):
         if player == Player.RED:
@@ -312,7 +316,7 @@ class GameManager:
                 for line in raw_blue.splitlines():
                     self._log.write(line + "\n")
 
-        last_move: tuple[int,int,str,int] | None = None
+        last_move: tuple[int, int, str, int] | None = None
         last_player: Player | None = None
         outcome = "OK"
         terminated = False
@@ -329,10 +333,7 @@ class GameManager:
             msg = self._move_to_str(last_move) if last_move is not None else "START"
 
             if controller is not None:
-                print(">>>  Requesting move from bot:", msg, outcome)
-                print('\n'.join(board_lines))
                 move_str = controller.request_move(msg, outcome, board_lines)
-                print(move_str)
             else:
                 print("Last move:", msg, outcome)
                 for line in board_lines:
@@ -340,7 +341,11 @@ class GameManager:
                 move_str = self._get_move_from_human(player)
 
             if self._log is None:
-                print(f"Move from {'Red' if player == Player.RED else 'Blue'}: {move_str}")
+                logger.info(
+                    "Move from %s: %s",
+                    "Red" if player == Player.RED else "Blue",
+                    move_str,
+                )
 
             parsed = self.parse_move(move_str)
             if parsed in {"SURRENDER", "QUIT"}:
@@ -353,19 +358,13 @@ class GameManager:
                 break
             
             src, dst = self._src_dest_from_move(*parsed, player)
-
-            print(self.env.valid_pieces_to_select())
-
             valid_select = self.env.valid_pieces_to_select()[src]
             if not valid_select:
                 outcome = "ILLEGAL"
                 terminated = True
                 break
             
-            print(src, dst)
             self.env.step(src)
-            print(self.env.valid_destinations(), dst)
-
             if self.env.valid_destinations()[dst]:
                 before = self.env.board.copy()
                 obs, reward, term, trunc, info = self.env.step(dst)
@@ -379,7 +378,7 @@ class GameManager:
                 terminated = True
 
             if self._log is None:
-                print("Outcome:", outcome)
+                logger.info("Outcome: %s", outcome)
 
             if self._log:
                 color_str = "RED" if player == Player.RED else "BLU"
@@ -390,7 +389,7 @@ class GameManager:
                 controller.confirm_result(self._move_to_str(last_move), outcome)
 
         if self._log is None:
-            print("Game ended with outcome:", outcome)
+            logger.info("Game ended with outcome: %s", outcome)
 
         red_remaining = int(np.sum((self.env.board > 0) & (self.env.board != Piece.LAKE.value)))
         blue_remaining = int(np.sum((self.env.board < 0) & (self.env.board != -Piece.LAKE.value)))
