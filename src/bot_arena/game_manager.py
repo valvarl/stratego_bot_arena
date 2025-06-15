@@ -279,23 +279,12 @@ class GameManager:
         return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
     
     def _src_dest_from_move(self, x: int, y: int, direction: str, multiplier: int, player: Player):
+        move = (x, y, direction, multiplier)
         if player == Player.RED:
-            src = (10 - y - 1, 10 - x - 1)
-            _direction = direction.upper()
-            if _direction == "UP":
-                _direction = "DOWN"
-            elif _direction == "DOWN":
-                _direction = "UP"
-            elif _direction == "LEFT":
-                _direction = "RIGHT"
-            elif _direction == "RIGHT":
-                _direction = "LEFT"
-            dst = self._dest_from_move(10 - x - 1, 10 - y - 1, _direction, multiplier)
-            return src, dst
-        else:
-            src = (y, x)
-            dst = self._dest_from_move(x, y, direction, multiplier)
-            return src, dst
+            move = self._rotate_move(move)
+        src = (move[1], move[0])
+        dst = self._dest_from_move(*move)
+        return src, dst
 
     def run(
         self,
@@ -376,6 +365,8 @@ class GameManager:
             else:
                 outcome = "ILLEGAL"
                 terminated = True
+                illegal_two_square = self.env.two_square_detector.validate_move(
+                    player, Piece(self.env.board[src]), src, dst)
 
             if self._log is None:
                 logger.info("Outcome: %s", outcome)
