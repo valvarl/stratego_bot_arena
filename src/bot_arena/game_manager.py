@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 import gymnasium as gym
@@ -91,9 +92,11 @@ class GameManager:
         red_total = sum(self.config.p1_pieces_num)
         blue_total = sum(self.config.p2_pieces_num)
 
-        if self._log is None:
-            print(f"Red setup: {red_setup}")
-            print(f"Blue setup: {blue_setup}")
+        # if self._log is None:
+        print(f"Red setup: {red_setup}")
+        print(f"Blue setup: {blue_setup}")
+
+        blue_setup = [row[::-1] for row in blue_setup]
 
         if red_total != blue_total:
             raise ValueError("Red and Blue setups must have the same number of pieces.")
@@ -111,6 +114,7 @@ class GameManager:
             if (turn % 2 == 0 and red_turn < red_total) or blue_turn >= blue_total:
                 if red_setup is not None:
                     action = self.setup_to_action(red_setup, Player.RED, red_turn)
+                    action = (10 - action[1] - 1, 10 - action[0] - 1)
                 else:
                     action = self.env.action_space.sample()  # Random action if no setup provided
                 self.env.step(action)
@@ -118,10 +122,15 @@ class GameManager:
             else:
                 if blue_setup is not None:
                     action = self.setup_to_action(blue_setup, Player.BLUE, blue_turn)
+                    action = (6 + action[1], 10 - action[0] - 1)
                 else:
                     action = self.env.action_space.sample()  # Random action if no setup provided
+                print(action)
+
                 self.env.step(action)
                 blue_turn += 1
+
+        print(self.env.board)
 
         return raw_red, raw_blue
 
@@ -167,7 +176,7 @@ class GameManager:
 
         return result
 
-    def board_to_str(self):
+    def board_to_str(self, reveal: Player):
         board = self.env.board
         lines = []
         for r in range(board.shape[0]):
@@ -183,6 +192,10 @@ class GameManager:
                 else:
                     row_chars.append('#')
             lines.append(''.join(row_chars))
+
+        if reveal == Player.RED:
+            lines = [row[::-1] for row in lines[::-1]]
+
         return lines
 
     def parse_move(self, move: str):
@@ -213,7 +226,7 @@ class GameManager:
             dx = multiplier
         else:
             raise ValueError(f"Unknown direction: {direction}")
-        return x + dx, y + dy
+        return y + dy, x + dx
 
     def _rotate_move(self, move):
         x, y, direction, mult = move
@@ -222,6 +235,17 @@ class GameManager:
         dir_map = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
         direction = dir_map[direction]
         return x, y, direction, mult
+    
+    def _rotate_move_str(self, move_str):
+        move = move_str.strip().split()
+        if len(move) > 4 or not move:
+            raise ValueError(f"Invalid move format: {move_str}")
+        if len(move) < 3:
+            return move_str
+        x, y, direction = int(move[0]), int(move[1]), move[2].upper()
+        mult = int(move[3]) if len(move) > 3 else 1
+        x, y, direction, mult = self._rotate_move((x, y, direction, mult))
+        return self._move_to_str((x, y, direction, mult))
 
     def _move_to_str(self, move):
         x, y, direction, mult = move
@@ -246,8 +270,28 @@ class GameManager:
         else:
             return "ILLEGAL"
 
-    def _get_move_from_human(self):
-        return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
+    def _get_move_from_human(self, player: Player):
+        move = input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
+        return move if player == Player.RED else self._rotate_move_str(move)
+    
+    def _src_dest_from_move(self, x: int, y: int, direction: str, multiplier: int, player: Player):
+        if player == Player.RED:
+            src = (10 - y - 1, 10 - x - 1)
+            _direction = direction.upper()
+            if _direction == "UP":
+                _direction = "DOWN"
+            elif _direction == "DOWN":
+                _direction = "UP"
+            elif _direction == "LEFT":
+                _direction = "RIGHT"
+            elif _direction == "RIGHT":
+                _direction = "LEFT"
+            dst = self._dest_from_move(10 - x - 1, 10 - y - 1, _direction, multiplier)
+            return src, dst
+        else:
+            src = (y, x)
+            dst = self._dest_from_move(x, y, direction, multiplier)
+            return src, dst
 
     def run(
         self,
@@ -275,30 +319,25 @@ class GameManager:
         turn_num = 1
         while not terminated:
             if self.render_mode == "human":
+                time.sleep(0.2)
                 self.env.render()
 
-            board_lines = self.board_to_str()
-
             player = self.env.player
+            board_lines = self.board_to_str(player)
             controller = self.red_bot if player == Player.RED else self.blue_bot
 
-            if last_move is None:
-                msg = "START"
-            else:
-                msg_move = (
-                    last_move
-                    if player == last_player
-                    else self._rotate_move(last_move)
-                )
-                msg = self._move_to_str(msg_move)
+            msg = self._move_to_str(last_move) if last_move is not None else "START"
 
             if controller is not None:
+                print(">>>  Requesting move from bot:", msg, outcome)
+                print('\n'.join(board_lines))
                 move_str = controller.request_move(msg, outcome, board_lines)
+                print(move_str)
             else:
                 print("Last move:", msg, outcome)
                 for line in board_lines:
                     print(line)
-                move_str = self._get_move_from_human()
+                move_str = self._get_move_from_human(player)
 
             if self._log is None:
                 print(f"Move from {'Red' if player == Player.RED else 'Blue'}: {move_str}")
@@ -312,25 +351,28 @@ class GameManager:
                 outcome = "ILLEGAL"
                 terminated = True
                 break
-            x, y, direction, mult = parsed
-            src = (y, x)
-            dst = self._dest_from_move(x, y, direction, mult)
-            dst = (dst[1], dst[0])
+            
+            src, dst = self._src_dest_from_move(*parsed, player)
+
+            print(self.env.valid_pieces_to_select())
 
             valid_select = self.env.valid_pieces_to_select()[src]
             if not valid_select:
                 outcome = "ILLEGAL"
                 terminated = True
                 break
-
+            
+            print(src, dst)
             self.env.step(src)
+            print(self.env.valid_destinations(), dst)
+
             if self.env.valid_destinations()[dst]:
                 before = self.env.board.copy()
                 obs, reward, term, trunc, info = self.env.step(dst)
                 after = np.rot90(self.env.board, 2) * -1
                 outcome = self._compute_outcome(before, after, src, dst)
                 terminated = term or trunc
-                last_move = (x, y, direction, mult)
+                last_move = parsed
                 last_player = player
             else:
                 outcome = "ILLEGAL"
@@ -341,7 +383,7 @@ class GameManager:
 
             if self._log:
                 color_str = "RED" if player == Player.RED else "BLU"
-                self._log.write(f"{turn_num} {color_str}: {self._move_to_str((x, y, direction, mult))} {outcome}\n")
+                self._log.write(f"{turn_num} {color_str}: {self._move_to_str(parsed)} {outcome}\n")
                 turn_num += 1
 
             if controller is not None and not terminated:
