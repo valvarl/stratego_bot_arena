@@ -14,8 +14,8 @@ from stratego import (
     Player,
 )
 
-from . import  detectors_patch
 from .bot_controller import BotController
+from .utils import  detectors_patch
 from .utils.move_parser import (
     parse_setup,
     setup_to_action,
