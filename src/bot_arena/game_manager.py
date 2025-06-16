@@ -14,6 +14,7 @@ from stratego import (
     Player,
 )
 
+from . import detectors_patch
 from .bot_controller import BotController
 
 
@@ -291,6 +292,17 @@ class GameManager:
         red_setup: str | list[list[Piece]] | None = None,
         blue_setup: str | list[list[Piece]] | None = None,
     ):
+        """Play a full game between the configured controllers.
+
+        This version adds explicit handling of the *two‑square rule*.
+        If a player violates the rule they receive *one* chance to pick
+        another move; on a second consecutive violation they immediately
+        lose by *ILLEGAL*.
+        """
+
+        # ---------------------------------------------------------------------
+        #  INITIAL SET‑UP (unchanged)
+        # ---------------------------------------------------------------------
         raw_red, raw_blue = self.setup(red_setup, blue_setup)
 
         if self._log:
@@ -310,17 +322,34 @@ class GameManager:
         outcome = "OK"
         terminated = False
         turn_num = 1
+
+        # ------------------------------------------------------------------
+        #  NEW : per‑player retry counter for two‑square rule infractions
+        # ------------------------------------------------------------------
+        two_square_retries = {Player.RED: 0, Player.BLUE: 0}
+
         while not terminated:
             if self.render_mode == "human":
                 time.sleep(0.2)
                 self.env.render()
 
-            player = self.env.player
+            player: Player = self.env.player
             board_lines = self.board_to_str(player)
             controller = self.red_bot if player == Player.RED else self.blue_bot
 
-            msg = self._move_to_str(last_move) if last_move is not None else "START"
+            # ------------------------------------------------------------------
+            #  NEW : If the *current* player already committed a two‑square
+            #  violation on the immediately preceding attempt, we must tell
+            #  them that the opponent made *NO_MOVE*.
+            # ------------------------------------------------------------------
+            if two_square_retries[player] == 1:
+                msg = "NO_MOVE"
+            else:
+                msg = self._move_to_str(last_move) if last_move is not None else "START"
 
+            # ------------------------------------------------------------------
+            #  SOLICIT MOVE
+            # ------------------------------------------------------------------
             if controller is not None:
                 move_str = controller.request_move(msg, outcome, board_lines)
             else:
@@ -330,6 +359,7 @@ class GameManager:
                 move_str = self._get_move_from_human(player)
 
             if self._log is None:
+                # console debug
                 logger.info(
                     "Move from %s: %s",
                     "Red" if player == Player.RED else "Blue",
@@ -345,14 +375,57 @@ class GameManager:
                 outcome = "ILLEGAL"
                 terminated = True
                 break
-            
+
+            # --------------------------------------------------------------
+            #  Convert the textual move into *src* and *dst* indices
+            # --------------------------------------------------------------
             src, dst = self._src_dest_from_move(*parsed, player)
+
+            # 1) SOURCE SQUARE MUST CONTAIN A SELECTABLE PIECE
             valid_select = self.env.valid_pieces_to_select()[src]
             if not valid_select:
                 outcome = "ILLEGAL"
                 terminated = True
                 break
-            
+
+            # --------------------------------------------------------------
+            # 2) TWO‑SQUARE RULE CHECK (performed *before* modifying env).
+            # --------------------------------------------------------------
+            two_square_ok = self.env.two_square_detector.validate_move(
+                player, Piece(self.env.board[src]), src, dst
+            )
+            if not two_square_ok:
+                # First or second consecutive violation?
+                two_square_retries[player] += 1
+                outcome = "ILLEGAL"
+
+                # Tell the (still current) controller that their move failed.
+                if controller is not None:
+                    controller.confirm_result(move_str, outcome)
+
+                # Logging of the illegal attempt
+                if self._log:
+                    color_str = "RED" if player == Player.RED else "BLU"
+                    self._log.write(
+                        f"{turn_num} {color_str}: {self._move_to_str(parsed)} {outcome} (2‑square)\n"
+                    )
+
+                # Second consecutive violation ‑> game over.
+                if two_square_retries[player] >= 2:
+                    terminated = True
+                else:
+                    # Give the same player another chance.  The opponent will
+                    # subsequently see *NO_MOVE*.
+                    outcome = "OK"  # protocol requires some outcome for next prompt
+                    # Do *not* advance the turn counter because the move was not executed.
+                    continue
+
+            # The move passed the two‑square rule, so clear any outstanding retry flag.
+            two_square_retries[player] = 0
+
+            # --------------------------------------------------------------
+            # 3) PROCEED WITH THE NORMAL TWO‑STEP MOVE SELECTION
+            # --------------------------------------------------------------
             self.env.step(src)
             if self.env.valid_destinations()[dst]:
                 before = self.env.board.copy()
@@ -363,33 +436,46 @@ class GameManager:
                 last_move = parsed
                 last_player = player
             else:
+                # destination itself illegal for some other reason
                 outcome = "ILLEGAL"
                 terminated = True
-                illegal_two_square = self.env.two_square_detector.validate_move(
-                    player, Piece(self.env.board[src]), src, dst)
 
+            # --------------------------------------------------------------
+            # 4) LOGGING + TURN ACCOUNTING
+            # --------------------------------------------------------------
             if self._log is None:
                 logger.info("Outcome: %s", outcome)
 
             if self._log:
                 color_str = "RED" if player == Player.RED else "BLU"
-                self._log.write(f"{turn_num} {color_str}: {self._move_to_str(parsed)} {outcome}\n")
+                self._log.write(
+                    f"{turn_num} {color_str}: {self._move_to_str(parsed)} {outcome}\n"
+                )
                 turn_num += 1
 
+            # Inform the controller about the outcome of *its own* move.
             if controller is not None and not terminated:
                 controller.confirm_result(self._move_to_str(last_move), outcome)
 
+        # ------------------------------------------------------------------
+        #  GAME HAS ENDED
+        # ------------------------------------------------------------------
         if self._log is None:
             logger.info("Game ended with outcome: %s", outcome)
 
-        red_remaining = int(np.sum((self.env.board > 0) & (self.env.board != Piece.LAKE.value)))
-        blue_remaining = int(np.sum((self.env.board < 0) & (self.env.board != -Piece.LAKE.value)))
+        red_remaining = int(
+            np.sum((self.env.board > 0) & (self.env.board != Piece.LAKE.value))
+        )
+        blue_remaining = int(
+            np.sum((self.env.board < 0) & (self.env.board != -Piece.LAKE.value))
+        )
 
         if self._log:
             winner = "RED" if last_player == Player.RED else "BLUE"
             winner_path = self.red_bot.path if last_player == Player.RED else self.blue_bot.path
-            self._log.write(f"{winner_path} {winner} VICTORY {turn_num-1} {red_remaining} {blue_remaining}\n")
-
+            self._log.write(
+                f"{winner_path} {winner} VICTORY {turn_num-1} {red_remaining} {blue_remaining}\n"
+            )
 
         if self.red_bot is not None:
             self.red_bot.end_game(outcome)
