@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import select
 import subprocess
-from typing import List, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,7 @@ class BotController:
         except BrokenPipeError:
             self.alive = False
 
-    def _read_line(self, timeout: Optional[float] = None) -> Optional[str]:
+    def _read_line(self, timeout: float | None = None) -> str | None:
         if timeout is None:
             timeout = self.timeout
         assert self.process.stdout is not None
@@ -51,7 +50,7 @@ class BotController:
             return line.rstrip("\n")
         return None
 
-    def _read_lines(self, count: int, timeout: Optional[float] = None) -> List[str]:
+    def _read_lines(self, count: int, timeout: float | None = None) -> list[str]:
         """Read a fixed number of lines, waiting for the first one."""
 
         first = self._read_line(timeout)
@@ -78,7 +77,7 @@ class BotController:
         logger.debug("%s setup lines: %s", self.name, rows)
         return "\n".join(rows)
 
-    def request_move(self, last_move: str, outcome: str, board_state: List[str]) -> str:
+    def request_move(self, last_move: str, outcome: str, board_state: list[str]) -> str:
         """Request a move from the bot given the current board."""
 
         if last_move == "START":

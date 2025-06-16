@@ -17,6 +17,7 @@ from stratego import (
 from .bot_controller import BotController
 from .utils import  detectors_patch
 from .utils.move_parser import (
+    parse_move,
     parse_setup,
     setup_to_action,
     src_dest_from_move,
@@ -55,7 +56,7 @@ class GameManager:
         self.red_bot = red_bot
         self.blue_bot = blue_bot
         self.log_file = log_file
-        self._log = open(log_file, "w") if log_file else None
+        self._log = open(log_file, "w", encoding="utf-8") if log_file else None
 
     def setup(
         self,
@@ -151,22 +152,6 @@ class GameManager:
 
         return lines
 
-    def parse_move(self, move: str):
-        tokens = move.strip().split()
-        if not tokens:
-            return None
-        if tokens[0].upper() in {"SURRENDER", "QUIT"}:
-            return tokens[0].upper()
-        if tokens[0].upper() == "NO_MOVE":
-            return "NO_MOVE"
-        if len(tokens) < 3:
-            return None
-        x = int(tokens[0])
-        y = int(tokens[1])
-        direction = tokens[2].upper()
-        multiplier = int(tokens[3]) if len(tokens) > 3 else 1
-        return x, y, direction, multiplier
-
     def _move_to_str(self, move):
         x, y, direction, mult = move
         return f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
@@ -190,7 +175,7 @@ class GameManager:
         else:
             return "ILLEGAL"
 
-    def _get_move_from_human(self, player: Player):
+    def _get_move_from_human(self):
         return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
 
     def run(
@@ -262,7 +247,7 @@ class GameManager:
                 print("Last move:", msg, outcome)
                 for line in board_lines:
                     print(line)
-                move_str = self._get_move_from_human(player)
+                move_str = self._get_move_from_human()
 
             if self._log is None:
                 # console debug
@@ -272,7 +257,7 @@ class GameManager:
                     move_str,
                 )
 
-            parsed = self.parse_move(move_str)
+            parsed = parse_move(move_str)
             if parsed in {"SURRENDER", "QUIT"}:
                 outcome = "SURRENDER"
                 terminated = True

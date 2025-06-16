@@ -17,8 +17,8 @@ TOKEN_TO_PIECE = {
     "1": Piece.MARSHAL,
 }
 
-def parse_setup(setup_string: str) -> list[Piece]:
-    rows = setup_string.strip().split("\n")
+def parse_setup(setup_string: str | list[str]) -> list[Piece]:
+    rows = setup_string.strip().split("\n") if isinstance(setup_string, str) else setup_string
 
     result = []
     for row in rows:
@@ -56,6 +56,23 @@ def setup_to_action(setup: list[list[Piece]], turn: int, pieces_num: dict[Piece,
                     return (x, y)
 
     raise ValueError(f"No {target_piece.name} found for turn {turn}")
+
+
+def parse_move(move: str):
+    tokens = move.strip().split()
+    if not tokens:
+        return None
+    if tokens[0].upper() in {"SURRENDER", "QUIT"}:
+        return tokens[0].upper()
+    if tokens[0].upper() == "NO_MOVE":
+        return "NO_MOVE"
+    if len(tokens) < 3:
+        return None
+    x = int(tokens[0])
+    y = int(tokens[1])
+    direction = tokens[2].upper()
+    multiplier = int(tokens[3]) if len(tokens) > 3 else 1
+    return x, y, direction, multiplier
 
 
 def rotate_move(move, height: int, width: int):
