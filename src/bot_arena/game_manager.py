@@ -14,8 +14,14 @@ from stratego import (
     Player,
 )
 
-from . import detectors_patch
+from . import  detectors_patch
 from .bot_controller import BotController
+from .utils.move_parser import (
+    parse_setup,
+    setup_to_action,
+    src_dest_from_move,
+    TOKEN_TO_PIECE,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -23,24 +29,7 @@ logger = logging.getLogger(__name__)
 
 class GameManager:
 
-    token_to_piece = {
-        ".": Piece.EMPTY,
-        "+": Piece.LAKE,
-        "F": Piece.FLAG,
-        "B": Piece.BOMB,
-        "s": Piece.SPY,
-        "9": Piece.SCOUT,
-        "8": Piece.MINER,
-        "7": Piece.SERGEANT,
-        "6": Piece.LIEUTENANT,
-        "5": Piece.CAPTAIN,
-        "4": Piece.MAJOR,
-        "3": Piece.COLONEL,
-        "2": Piece.GENERAL,
-        "1": Piece.MARSHAL,
-    }
-
-    piece_to_token = {v: k for k, v in token_to_piece.items()}
+    piece_to_token = {v: k for k, v in TOKEN_TO_PIECE.items()}
 
     def __init__(
         self,
@@ -85,7 +74,7 @@ class GameManager:
             red_setup = raw_red
 
         if isinstance(red_setup, str):
-            red_setup = self.parse_setup(red_setup)
+            red_setup = parse_setup(red_setup)
 
         if self.blue_bot is not None:
             raw_blue = self.blue_bot.setup(
@@ -97,7 +86,7 @@ class GameManager:
             blue_setup = raw_blue
 
         if isinstance(blue_setup, str):
-            blue_setup = self.parse_setup(blue_setup)
+            blue_setup = parse_setup(blue_setup)
             blue_setup = [row[::-1] for row in blue_setup]
 
         red_total = sum(self.config.p1_pieces_num)
@@ -122,7 +111,7 @@ class GameManager:
         for turn in range(red_total + blue_total):
             if (turn % 2 == 0 and red_turn < red_total) or blue_turn >= blue_total:
                 if red_setup is not None:
-                    action = self.setup_to_action(red_setup, Player.RED, red_turn)
+                    action = setup_to_action(red_setup, red_turn, self.config.p1_pieces)
                     action = (10 - action[1] - 1, 10 - action[0] - 1)
                 else:
                     action = self.env.action_space.sample()  # Random action if no setup provided
@@ -130,7 +119,7 @@ class GameManager:
                 red_turn += 1
             else:
                 if blue_setup is not None:
-                    action = self.setup_to_action(blue_setup, Player.BLUE, blue_turn)
+                    action = setup_to_action(blue_setup, blue_turn, self.config.p2_pieces)
                     action = (6 + action[1], 10 - action[0] - 1)
                 else:
                     action = self.env.action_space.sample()  # Random action if no setup provided
@@ -139,48 +128,6 @@ class GameManager:
                 blue_turn += 1
 
         return raw_red, raw_blue
-
-    def setup_to_action(self, setup: list[list[Piece]], player: Player, turn: int) -> tuple[int, int]:
-        pieces_num = self.config.p1_pieces if player == Player.RED else self.config.p2_pieces
-
-        # Calculate which piece to place based on the turn
-        current_turn = turn
-        target_piece = None
-        for piece in [Piece(i) for i in range(2, 14)]:
-            count = pieces_num[piece]
-            if current_turn < count:
-                target_piece = piece
-                break
-            current_turn -= count
-        else:
-            raise ValueError("Unexpected turn number")
-
-        # Find the first occurrence of the target piece in the setup
-        for y, row in enumerate(setup):
-            for x, cell in enumerate(row):
-                if cell == target_piece:
-                    # Count how many of this piece type have been placed before this turn
-                    placed_count = sum(
-                        1 for py in range(len(setup)) for px in range(len(setup[py]))
-                        if setup[py][px] == target_piece and (py * len(setup[py]) + px < y * len(setup[y]) + x)
-                    )
-                    if placed_count == current_turn:
-                        return (x, y)
-
-        raise ValueError(f"No {target_piece.name} found for turn {turn}")
-
-    def parse_setup(self, setup_string: str) -> list[Piece]:
-        rows = setup_string.strip().split("\n")
-
-        result = []
-        for row in rows:
-            row_pieces = [self.token_to_piece.get(char) for char in row]
-            if None in row_pieces:
-                invalid_chars = [char for char in row if char not in self.token_to_piece]
-                raise ValueError(f"Invalid characters in row '{row}': {invalid_chars}")
-            result.append(row_pieces)
-
-        return result
 
     def board_to_str(self, reveal: Player):
         board = self.env.board
@@ -220,39 +167,6 @@ class GameManager:
         multiplier = int(tokens[3]) if len(tokens) > 3 else 1
         return x, y, direction, multiplier
 
-    def _dest_from_move(self, x: int, y: int, direction: str, multiplier: int):
-        dx, dy = 0, 0
-        if direction == "UP":
-            dy = -multiplier
-        elif direction == "DOWN":
-            dy = multiplier
-        elif direction == "LEFT":
-            dx = -multiplier
-        elif direction == "RIGHT":
-            dx = multiplier
-        else:
-            raise ValueError(f"Unknown direction: {direction}")
-        return y + dy, x + dx
-
-    def _rotate_move(self, move):
-        x, y, direction, mult = move
-        x = self.config.width - 1 - x
-        y = self.config.height - 1 - y
-        dir_map = {"UP": "DOWN", "DOWN": "UP", "LEFT": "RIGHT", "RIGHT": "LEFT"}
-        direction = dir_map[direction]
-        return x, y, direction, mult
-
-    def _rotate_move_str(self, move_str):
-        move = move_str.strip().split()
-        if len(move) > 4 or not move:
-            raise ValueError(f"Invalid move format: {move_str}")
-        if len(move) < 3:
-            return move_str
-        x, y, direction = int(move[0]), int(move[1]), move[2].upper()
-        mult = int(move[3]) if len(move) > 3 else 1
-        x, y, direction, mult = self._rotate_move((x, y, direction, mult))
-        return self._move_to_str((x, y, direction, mult))
-
     def _move_to_str(self, move):
         x, y, direction, mult = move
         return f"{x} {y} {direction}" + (f" {mult}" if mult != 1 else "")
@@ -278,14 +192,6 @@ class GameManager:
 
     def _get_move_from_human(self, player: Player):
         return input("Enter move (x y DIRECTION [MULT]) or SURRENDER: ")
-    
-    def _src_dest_from_move(self, x: int, y: int, direction: str, multiplier: int, player: Player):
-        move = (x, y, direction, multiplier)
-        if player == Player.RED:
-            move = self._rotate_move(move)
-        src = (move[1], move[0])
-        dst = self._dest_from_move(*move)
-        return src, dst
 
     def run(
         self,
@@ -379,7 +285,7 @@ class GameManager:
             # --------------------------------------------------------------
             #  Convert the textual move into *src* and *dst* indices
             # --------------------------------------------------------------
-            src, dst = self._src_dest_from_move(*parsed, player)
+            src, dst = src_dest_from_move(*parsed, player, self.config.height, self.config.width)
 
             # 1) SOURCE SQUARE MUST CONTAIN A SELECTABLE PIECE
             valid_select = self.env.valid_pieces_to_select()[src]
